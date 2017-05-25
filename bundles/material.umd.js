@@ -22189,8 +22189,8 @@ MdExpansionPanelHeader.decorators = [
                 },
                 animations: [
                     _angular_animations.trigger('indicatorRotate', [
-                        _angular_animations.state('collapsed', _angular_animations.style({ transform: 'rotate(0deg)' })),
-                        _angular_animations.state('expanded', _angular_animations.style({ transform: 'rotate(-180deg)' })),
+                        _angular_animations.state('collapsed', _angular_animations.style({ transform: 'rotate(-180deg)' })),
+                        _angular_animations.state('expanded', _angular_animations.style({ transform: 'rotate(0deg)' })),
                         _angular_animations.transition('expanded <=> collapsed', _angular_animations.animate(EXPANSION_PANEL_ANIMATION_TIMING)),
                     ]),
                     _angular_animations.trigger('expansionHeight', [
