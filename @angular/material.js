@@ -28,6 +28,8 @@ import 'rxjs/add/operator/finally';
 import 'rxjs/add/operator/catch';
 import 'rxjs/add/observable/throw';
 import 'rxjs/add/operator/switchMap';
+import { BrowserAnimationsModule } from '@angular/platform-browser/animations';
+import 'rxjs/add/operator/takeUntil';
 
 const MATERIAL_COMPATIBILITY_MODE = new InjectionToken('md-compatibility-mode');
 /**
@@ -8545,13 +8547,13 @@ class MdSelect {
         if (this.multiple && value && !isArray) {
             throw getMdSelectNonArrayValueError();
         }
+        this._clearSelection();
         if (isArray) {
-            this._clearSelection();
             value.forEach((currentValue) => this._selectValue(currentValue));
             this._sortValues();
         }
-        else if (!this._selectValue(value)) {
-            this._clearSelection();
+        else {
+            this._selectValue(value);
         }
         this._setValueWidth();
         if (this._selectionModel.isEmpty()) {
@@ -8566,7 +8568,7 @@ class MdSelect {
      */
     _selectValue(value) {
         let /** @type {?} */ optionsArray = this.options.toArray();
-        let /** @type {?} */ correspondingOption = optionsArray.find(option => option.value === value);
+        let /** @type {?} */ correspondingOption = optionsArray.find(option => option.value && option.value === value);
         if (correspondingOption) {
             correspondingOption.select();
             this._selectionModel.select(correspondingOption);
@@ -8633,14 +8635,20 @@ class MdSelect {
      */
     _onSelect(option) {
         const /** @type {?} */ wasSelected = this._selectionModel.isSelected(option);
+        // TODO(crisbeto): handle blank/null options inside multi-select.
         if (this.multiple) {
             this._selectionModel.toggle(option);
             wasSelected ? option.deselect() : option.select();
             this._sortValues();
         }
         else {
-            this._clearSelection(option);
-            this._selectionModel.select(option);
+            this._clearSelection(option.value == null ? null : option);
+            if (option.value == null) {
+                this._propagateChanges(option.value);
+            }
+            else {
+                this._selectionModel.select(option);
+            }
         }
         if (wasSelected !== this._selectionModel.isSelected(option)) {
             this._propagateChanges();
@@ -8673,12 +8681,17 @@ class MdSelect {
     }
     /**
      * Emits change event to set the model value.
+     * @param {?=} fallbackValue
      * @return {?}
      */
-    _propagateChanges() {
-        let /** @type {?} */ valueToEmit = Array.isArray(this.selected) ?
-            this.selected.map(option => option.value) :
-            this.selected.value;
+    _propagateChanges(fallbackValue) {
+        let /** @type {?} */ valueToEmit = null;
+        if (Array.isArray(this.selected)) {
+            valueToEmit = this.selected.map(option => option.value);
+        }
+        else {
+            valueToEmit = this.selected ? this.selected.value : fallbackValue;
+        }
         this._onChange(valueToEmit);
         this.change.emit(new MdSelectChange(this, valueToEmit));
     }
@@ -13030,8 +13043,14 @@ class MdIconRegistry {
         }
         // If the icon node is itself an <svg> node, clone and return it directly. If not, set it as
         // the content of a new <svg> node.
-        if (iconNode.tagName.toLowerCase() == 'svg') {
+        if (iconNode.tagName.toLowerCase() === 'svg') {
             return this._setSvgAttributes(/** @type {?} */ (iconNode.cloneNode(true)));
+        }
+        // If the node is a <symbol>, it won't be rendered so we have to convert it into <svg>. Note
+        // that the same could be achieved by referring to it via <use href="#id">, however the <use>
+        // tag is problematic on Firefox, because it needs to include the current page path.
+        if (iconNode.nodeName.toLowerCase() === 'symbol') {
+            return this._setSvgAttributes(this._toSvgElement(iconNode));
         }
         // createElement('SVG') doesn't work as expected; the DOM ends up with
         // the correct nodes, but the SVG content doesn't render. Instead we
@@ -13056,6 +13075,20 @@ class MdIconRegistry {
         const /** @type {?} */ svg = (div.querySelector('svg'));
         if (!svg) {
             throw new Error('<svg> tag not found');
+        }
+        return svg;
+    }
+    /**
+     * Converts an element into an SVG node by cloning all of its children.
+     * @param {?} element
+     * @return {?}
+     */
+    _toSvgElement(element) {
+        let /** @type {?} */ svg = this._svgElementFromString('<svg></svg>');
+        for (let /** @type {?} */ i = 0; i < element.childNodes.length; i++) {
+            if (element.childNodes[i].nodeType === Node.ELEMENT_NODE) {
+                svg.appendChild(element.childNodes[i].cloneNode(true));
+            }
         }
         return svg;
     }
@@ -14025,9 +14058,13 @@ MdPlaceholder.ctorParameters = () => [];
  */
 class MdHint {
     constructor() {
-        // Whether to align the hint label at the start or end of the line.
+        /**
+         * Whether to align the hint label at the start or end of the line.
+         */
         this.align = 'start';
-        // Unique ID for the hint. Used for the aria-describedby on the input.
+        /**
+         * Unique ID for the hint. Used for the aria-describedby on the input.
+         */
         this.id = `md-input-hint-${nextUniqueId$1++}`;
     }
 }
@@ -14212,6 +14249,7 @@ class MdInputDirective {
      */
     set value(value) { this._elementRef.nativeElement.value = value; }
     /**
+     * Whether the input is empty.
      * @return {?}
      */
     get empty() {
@@ -14356,7 +14394,7 @@ class MdInputContainer {
      */
     set dividerColor(value) { this.color = value; }
     /**
-     * Whether we should hide the required marker.
+     * Whether the required marker should be hidden.
      * @return {?}
      */
     get hideRequiredMarker() { return this._hideRequiredMarker; }
@@ -14815,6 +14853,10 @@ class MdSnackBarConfig {
          * The length of time in milliseconds to wait before automatically dismissing the snack bar.
          */
         this.duration = 0;
+        /**
+         * Text layout direction for the snack bar.
+         */
+        this.direction = 'ltr';
     }
 }
 
@@ -15090,12 +15132,15 @@ class SimpleSnackBar {
      * If the action button should be shown.
      * @return {?}
      */
-    get hasAction() { return !!this.action; }
+    get hasAction() {
+        return !!this.action;
+    }
 }
 SimpleSnackBar.decorators = [
     { type: Component, args: [{selector: 'simple-snack-bar',
                 template: "{{message}} <button class=\"mat-simple-snackbar-action\" *ngIf=\"hasAction\" (click)=\"dismiss()\">{{action}}</button> ",
-                styles: [":host{display:flex;justify-content:space-between;color:#fff;line-height:20px;font-size:14px;font-family:Roboto,\"Helvetica Neue\",sans-serif}.mat-simple-snackbar-action{-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;user-select:none;cursor:pointer;outline:0;border:none;background:0 0;color:inherit;line-height:1;flex-shrink:0;margin-left:48px;font-family:inherit;font-size:inherit;font-weight:600} /*# sourceMappingURL=simple-snack-bar.css.map */ "],
+                styles: [".mat-simple-snackbar{display:flex;justify-content:space-between;color:#fff;line-height:20px;font-size:14px;font-family:Roboto,\"Helvetica Neue\",sans-serif}.mat-simple-snackbar-action{-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;user-select:none;cursor:pointer;outline:0;border:none;background:0 0;color:inherit;line-height:1;flex-shrink:0;margin-left:48px;font-family:inherit;font-size:inherit;font-weight:600}[dir=rtl] .mat-simple-snackbar-action{margin-right:48px;margin-left:0} /*# sourceMappingURL=simple-snack-bar.css.map */ "],
+                encapsulation: ViewEncapsulation.None,
                 host: {
                     '[class.mat-simple-snackbar]': 'true',
                 }
@@ -15175,7 +15220,7 @@ class MdSnackBar {
      */
     openFromComponent(component, config) {
         config = _applyConfigDefaults(config);
-        let /** @type {?} */ overlayRef = this._createOverlay();
+        let /** @type {?} */ overlayRef = this._createOverlay(config);
         let /** @type {?} */ snackBarContainer = this._attachSnackBarContainer(overlayRef, config);
         let /** @type {?} */ snackBarRef = this._attachSnackbarContent(component, snackBarContainer, overlayRef);
         // When the snackbar is dismissed, clear the reference to it.
@@ -15258,13 +15303,13 @@ class MdSnackBar {
     }
     /**
      * Creates a new overlay and places it in the correct location.
+     * @param {?} config The user-specified snack bar config.
      * @return {?}
      */
-    _createOverlay() {
+    _createOverlay(config) {
         let /** @type {?} */ state$$1 = new OverlayState();
-        state$$1.positionStrategy = this._overlay.position().global()
-            .centerHorizontally()
-            .bottom('0');
+        state$$1.direction = config.direction;
+        state$$1.positionStrategy = this._overlay.position().global().centerHorizontally().bottom('0');
         return this._overlay.create(state$$1);
     }
 }
@@ -20497,6 +20542,426 @@ MdDatepickerModule.decorators = [
  */
 MdDatepickerModule.ctorParameters = () => [];
 
+/**
+ * Unique ID counter
+ */
+let nextId$3 = 0;
+/**
+ * Directive whose purpose is to manage the expanded state of CdkAccordionItem children.
+ */
+class CdkAccordion {
+    constructor() {
+        /**
+         * A readonly id value to use for unique selection coordination.
+         */
+        this.id = `cdk-accordion-${nextId$3++}`;
+        this._hideToggle = false;
+        /**
+         * Whether the panel set should use flat styling.
+         */
+        this.displayMode = 'default';
+        this._multi = false;
+    }
+    /**
+     * Whether the expansion indicator should be hidden.
+     * @return {?}
+     */
+    get hideToggle() { return this._hideToggle; }
+    /**
+     * @param {?} show
+     * @return {?}
+     */
+    set hideToggle(show) { this._hideToggle = coerceBooleanProperty(show); }
+    /**
+     * Whether the panel set should allow multiple open panels.
+     * @return {?}
+     */
+    get multi() { return this._multi; }
+    /**
+     * @param {?} multi
+     * @return {?}
+     */
+    set multi(multi) { this._multi = coerceBooleanProperty(multi); }
+}
+CdkAccordion.decorators = [
+    { type: Directive, args: [{
+                selector: '[cdk-accordion]',
+            },] },
+];
+/**
+ * @nocollapse
+ */
+CdkAccordion.ctorParameters = () => [];
+CdkAccordion.propDecorators = {
+    'hideToggle': [{ type: Input },],
+    'displayMode': [{ type: Input },],
+    'multi': [{ type: Input },],
+};
+
+/**
+ * Used to generate unique ID for each expansion panel.
+ */
+let nextId$4 = 0;
+/**
+ * An abstract class to be extended and decorated as a component.  Sets up all
+ * events and attributes needed to be managed by a CdkAccordion parent.
+ * @abstract
+ */
+class CdkAccordionItem {
+    /**
+     * @param {?} accordion
+     * @param {?} _uniqueSelectionDispatcher
+     */
+    constructor(accordion, _uniqueSelectionDispatcher) {
+        this.accordion = accordion;
+        this._uniqueSelectionDispatcher = _uniqueSelectionDispatcher;
+        /**
+         * Event emitted every time the MdAccordianChild is closed.
+         */
+        this.closed = new EventEmitter();
+        /**
+         * Event emitted every time the MdAccordianChild is opened.
+         */
+        this.opened = new EventEmitter();
+        /**
+         * Event emitted when the MdAccordianChild is destroyed.
+         */
+        this.destroyed = new EventEmitter();
+        /**
+         * The unique MdAccordianChild id.
+         */
+        this.id = `cdk-accordion-child-${nextId$4++}`;
+        _uniqueSelectionDispatcher.listen((id, accordionId) => {
+            if (this.accordion && !this.accordion.multi &&
+                this.accordion.id === accordionId && this.id !== id) {
+                this.expanded = false;
+            }
+        });
+    }
+    /**
+     * Whether the MdAccordianChild is expanded.
+     * @return {?}
+     */
+    get expanded() { return this._expanded; }
+    /**
+     * @param {?} expanded
+     * @return {?}
+     */
+    set expanded(expanded) {
+        // Only emit events and update the internal value if the value changes.
+        if (this._expanded !== expanded) {
+            this._expanded = expanded;
+            if (expanded) {
+                this.opened.emit();
+                /**
+                 * In the unique selection dispatcher, the id parameter is the id of the CdkAccordonItem,
+                 * the name value is the id of the accordion.
+                 */
+                let accordionId = this.accordion ? this.accordion.id : this.id;
+                this._uniqueSelectionDispatcher.notify(this.id, accordionId);
+            }
+            else {
+                this.closed.emit();
+            }
+        }
+    }
+    /**
+     * Emits an event for the accordion child being destroyed.
+     * @return {?}
+     */
+    ngOnDestroy() {
+        this.destroyed.emit();
+    }
+}
+/**
+ * @nocollapse
+ */
+CdkAccordionItem.ctorParameters = () => [
+    { type: CdkAccordion, decorators: [{ type: Optional }, { type: Host },] },
+    { type: UniqueSelectionDispatcher, },
+];
+CdkAccordionItem.propDecorators = {
+    'closed': [{ type: Output },],
+    'opened': [{ type: Output },],
+    'destroyed': [{ type: Output },],
+    'expanded': [{ type: Input },],
+};
+
+/**
+ * Time and timing curve for expansion panel animations.
+ */
+const EXPANSION_PANEL_ANIMATION_TIMING = '225ms cubic-bezier(0.4,0.0,0.2,1)';
+/**
+ * <md-expansion-panel> component.
+ *
+ * This component can be used as a single element to show expandable content, or as one of
+ * multiple children of an element with the CdkAccordion directive attached.
+ *
+ * Please refer to README.md for examples on how to use it.
+ */
+class MdExpansionPanel extends CdkAccordionItem {
+    /**
+     * @param {?} accordion
+     * @param {?} _uniqueSelectionDispatcher
+     */
+    constructor(accordion, _uniqueSelectionDispatcher) {
+        super(accordion, _uniqueSelectionDispatcher);
+        /**
+         * Whether the toggle indicator should be hidden.
+         */
+        this.hideToggle = true;
+        /**
+         * The expansion panel style.
+         */
+        this.panelStyle = 'default';
+    }
+    /**
+     * Toggles the expanded state of the panel.
+     * @return {?}
+     */
+    toggle() {
+        this.expanded = !this.expanded;
+    }
+    /**
+     * Whether the expansion indicator should be hidden.
+     * @return {?}
+     */
+    _getHideToggle() {
+        if (this.accordion) {
+            return this.accordion.hideToggle;
+        }
+        return this.hideToggle;
+    }
+    /**
+     * Gets the panel's display mode.
+     * @return {?}
+     */
+    _getDisplayMode() {
+        if (!this.expanded) {
+            return this._getExpandedState();
+        }
+        if (this.accordion) {
+            return this.accordion.displayMode;
+        }
+        return this._getExpandedState();
+    }
+    /**
+     * Gets the expanded state string.
+     * @return {?}
+     */
+    _getExpandedState() {
+        return this.expanded ? 'expanded' : 'collapsed';
+    }
+}
+MdExpansionPanel.decorators = [
+    { type: Component, args: [{styles: [".mat-expansion-panel{transition:box-shadow 280ms cubic-bezier(.4,0,.2,1);will-change:box-shadow;box-sizing:content-box;display:block}.mat-expansion-panel:not([class*=mat-elevation-z]){box-shadow:0 3px 1px -2px rgba(0,0,0,.2),0 2px 2px 0 rgba(0,0,0,.14),0 1px 5px 0 rgba(0,0,0,.12)}.mat-expansion-panel-content{overflow:hidden}.mat-expansion-panel-body{padding:0 24px 16px}[mat-action-row],[md-action-row]{border-top-style:solid;border-top-width:1px;display:flex;flex-direction:row;justify-content:flex-end;padding:16px 8px 16px 24px}[mat-action-row] button.mat-button,[md-action-row] button.mat-button{margin-left:8px} /*# sourceMappingURL=expansion-panel.css.map */ "],
+                selector: 'md-expansion-panel, mat-expansion-panel',
+                template: "<ng-content select=\"mat-expansion-panel-header, md-expansion-panel-header\"></ng-content> <div [class.mat-expanded]=\"expanded\" class=\"mat-expansion-panel-content\" [@bodyExpansion]=\"_getExpandedState()\" [id]=\"id\"> <div class=\"mat-expansion-panel-body\"> <ng-content></ng-content> </div> <ng-content select=\"[mat-action-row], [md-action-row]\"></ng-content> </div>",
+                encapsulation: ViewEncapsulation.None,
+                host: {
+                    'class': 'mat-expansion-panel',
+                    '[class.mat-expanded]': 'expanded',
+                    '[@displayMode]': '_getDisplayMode()',
+                },
+                providers: [
+                    { provide: CdkAccordionItem, useExisting: forwardRef(() => MdExpansionPanel) }
+                ],
+                animations: [
+                    trigger('bodyExpansion', [
+                        state('collapsed', style({ height: '0px' })),
+                        state('expanded', style({ height: '*' })),
+                        transition('expanded <=> collapsed', animate(EXPANSION_PANEL_ANIMATION_TIMING)),
+                    ]),
+                    trigger('displayMode', [
+                        state('collapsed', style({ margin: '0' })),
+                        state('default', style({ margin: '16px 0' })),
+                        state('flat', style({ margin: '0' })),
+                        transition('flat <=> collapsed, default <=> collapsed, flat <=> default', animate(EXPANSION_PANEL_ANIMATION_TIMING)),
+                    ]),
+                ],
+            },] },
+];
+/**
+ * @nocollapse
+ */
+MdExpansionPanel.ctorParameters = () => [
+    { type: CdkAccordion, decorators: [{ type: Optional }, { type: Host },] },
+    { type: UniqueSelectionDispatcher, },
+];
+MdExpansionPanel.propDecorators = {
+    'hideToggle': [{ type: Input },],
+    'panelStyle': [{ type: Input },],
+};
+
+/**
+ * <md-expansion-panel-header> component.
+ *
+ * This component corresponds to the header element of an <md-expansion-panel>.
+ *
+ * Please refer to README.md for examples on how to use it.
+ */
+class MdExpansionPanelHeader {
+    /**
+     * @param {?} panel
+     */
+    constructor(panel) {
+        this.panel = panel;
+    }
+    /**
+     * Toggles the expanded state of the panel.
+     * @param {?=} event
+     * @return {?}
+     */
+    _toggle(event) {
+        this.panel.toggle();
+    }
+    /**
+     * Gets whether the panel is expanded.
+     * @return {?}
+     */
+    _isExpanded() {
+        return this.panel.expanded;
+    }
+    /**
+     * Gets the expanded state string of the panel.
+     * @return {?}
+     */
+    _getExpandedState() {
+        return this.panel._getExpandedState();
+    }
+    /**
+     * Gets the panel id.
+     * @return {?}
+     */
+    _getPanelId() {
+        return this.panel.id;
+    }
+    /**
+     * Gets whether the expand indicator is hidden.
+     * @return {?}
+     */
+    _getHideToggle() {
+        return this.panel.hideToggle;
+    }
+    /**
+     * Handle keyup event calling to toggle() if appropriate.
+     * @param {?} event
+     * @return {?}
+     */
+    _keyup(event) {
+        switch (event.keyCode) {
+            // Toggle for space and enter keys.
+            case SPACE:
+            case ENTER:
+                this._toggle();
+                break;
+            default:
+                return;
+        }
+    }
+}
+MdExpansionPanelHeader.decorators = [
+    { type: Component, args: [{selector: 'md-expansion-panel-header, mat-expansion-panel-header',
+                styles: [".mat-expansion-panel-header{cursor:pointer;display:flex;flex-direction:row;height:48px;line-height:48px;padding:0 24px}.mat-expansion-panel-header.mat-expanded{height:64px;line-height:64px}.mat-expansion-panel-header:focus,.mat-expansion-panel-header:hover{outline:0}.mat-expansion-panel-header.mat-expanded:focus,.mat-expansion-panel-header.mat-expanded:hover{background:inherit}.mat-content{display:flex;flex:1;flex-direction:row;overflow:hidden}.mat-expansion-panel-header-title{display:flex;flex-grow:1;font-size:15px;margin-right:16px}.mat-expansion-panel-header-description{display:flex;flex-grow:2;font-size:15px;margin-right:16px}.mat-expansion-indicator::after{border-style:solid;border-width:0 2px 2px 0;content:'';display:inline-block;padding:3px;transform:rotate(-135deg);vertical-align:middle} /*# sourceMappingURL=expansion-panel-header.css.map */ "],
+                template: "<span class=\"mat-content\"> <ng-content select=\"md-panel-title, mat-panel-title\"></ng-content> <ng-content select=\"md-panel-description, mat-panel-description\"></ng-content> <ng-content></ng-content> </span> <span [@indicatorRotate]=\"_getExpandedState()\" *ngIf=\"!_getHideToggle()\"  class=\"mat-expansion-indicator\"></span>",
+                encapsulation: ViewEncapsulation.None,
+                host: {
+                    'class': 'mat-expansion-panel-header',
+                    'role': 'button',
+                    'tabindex': '0',
+                    '[attr.aria-controls]': '_getPanelId()',
+                    '[attr.aria-expanded]': '_isExpanded()',
+                    '[class.mat-expanded]': '_isExpanded()',
+                    '(click)': '_toggle()',
+                    '(keyup)': '_keyup($event)',
+                    '[@expansionHeight]': '_getExpandedState()',
+                },
+                animations: [
+                    trigger('indicatorRotate', [
+                        state('collapsed', style({ transform: 'rotate(0deg)' })),
+                        state('expanded', style({ transform: 'rotate(-180deg)' })),
+                        transition('expanded <=> collapsed', animate(EXPANSION_PANEL_ANIMATION_TIMING)),
+                    ]),
+                    trigger('expansionHeight', [
+                        state('collapsed', style({ height: '48px', 'line-height': '48px' })),
+                        state('expanded', style({ height: '64px', 'line-height': '68px' })),
+                        transition('expanded <=> collapsed', animate(EXPANSION_PANEL_ANIMATION_TIMING)),
+                    ]),
+                ],
+            },] },
+];
+/**
+ * @nocollapse
+ */
+MdExpansionPanelHeader.ctorParameters = () => [
+    { type: MdExpansionPanel, decorators: [{ type: Host },] },
+];
+/**
+ * <md-panel-description> directive.
+ *
+ * This direction is to be used inside of the MdExpansionPanelHeader component.
+ */
+class MdExpansionPanelDescription {
+}
+MdExpansionPanelDescription.decorators = [
+    { type: Directive, args: [{
+                selector: 'md-panel-description, mat-panel-description',
+                host: {
+                    class: 'mat-expansion-panel-header-description'
+                }
+            },] },
+];
+/**
+ * @nocollapse
+ */
+MdExpansionPanelDescription.ctorParameters = () => [];
+/**
+ * <md-panel-title> directive.
+ *
+ * This direction is to be used inside of the MdExpansionPanelHeader component.
+ */
+class MdExpansionPanelTitle {
+}
+MdExpansionPanelTitle.decorators = [
+    { type: Directive, args: [{
+                selector: 'md-panel-title, mat-panel-title',
+                host: {
+                    class: 'mat-expansion-panel-header-title'
+                }
+            },] },
+];
+/**
+ * @nocollapse
+ */
+MdExpansionPanelTitle.ctorParameters = () => [];
+
+class MdExpansionModule {
+}
+MdExpansionModule.decorators = [
+    { type: NgModule, args: [{
+                imports: [CompatibilityModule, CommonModule, BrowserAnimationsModule],
+                exports: [
+                    MdExpansionPanel,
+                    MdExpansionPanelHeader,
+                    CdkAccordion,
+                    MdExpansionPanelTitle,
+                    MdExpansionPanelDescription
+                ],
+                declarations: [
+                    MdExpansionPanel,
+                    MdExpansionPanelHeader,
+                    CdkAccordion,
+                    MdExpansionPanelTitle,
+                    MdExpansionPanelDescription
+                ],
+                providers: [UNIQUE_SELECTION_DISPATCHER_PROVIDER]
+            },] },
+];
+/**
+ * @nocollapse
+ */
+MdExpansionModule.ctorParameters = () => [];
+
 const MATERIAL_MODULES = [
     MdAutocompleteModule,
     MdButtonModule,
@@ -20506,6 +20971,7 @@ const MATERIAL_MODULES = [
     MdCheckboxModule,
     MdDatepickerModule,
     MdDialogModule,
+    MdExpansionModule,
     MdGridListModule,
     MdIconModule,
     MdInputModule,
@@ -20558,5 +21024,5 @@ MaterialModule.ctorParameters = () => [];
  * Generated bundle index. Do not edit.
  */
 
-export { Dir, RtlModule, ObserveContentModule, ObserveContent, MdOptionModule, MdOption, MdOptionSelectionChange, Portal, BasePortalHost, ComponentPortal, TemplatePortal, PortalHostDirective, TemplatePortalDirective, PortalModule, DomPortalHost, GestureConfig, LiveAnnouncer, LIVE_ANNOUNCER_ELEMENT_TOKEN, LIVE_ANNOUNCER_PROVIDER, InteractivityChecker, isFakeMousedownFromScreenReader, A11yModule, UniqueSelectionDispatcher, UNIQUE_SELECTION_DISPATCHER_PROVIDER, MdLineModule, MdLine, MdLineSetter, coerceBooleanProperty, coerceNumberProperty, CompatibilityModule, NoConflictStyleCompatibilityMode, MdCommonModule, MdCoreModule, PlatformModule, Platform, getSupportedInputTypes, Overlay, OVERLAY_PROVIDERS, OverlayContainer, FullscreenOverlayContainer, OverlayRef, OverlayState, ConnectedOverlayDirective, OverlayOrigin, OverlayModule, ViewportRuler, GlobalPositionStrategy, ConnectedPositionStrategy, ConnectionPositionPair, ScrollableViewProperties, ConnectedOverlayPositionChange, Scrollable, ScrollDispatcher, RepositionScrollStrategy, CloseScrollStrategy, NoopScrollStrategy, BlockScrollStrategy, ScrollDispatchModule, MdRipple, MD_RIPPLE_GLOBAL_OPTIONS, RippleRef, RippleState, RIPPLE_FADE_IN_DURATION, RIPPLE_FADE_OUT_DURATION, MdRippleModule, SelectionModel, SelectionChange, FocusTrap, FocusTrapFactory, FocusTrapDeprecatedDirective, FocusTrapDirective, StyleModule, TOUCH_BUFFER_MS, FocusOriginMonitor, CdkMonitorFocus, FOCUS_ORIGIN_MONITOR_PROVIDER_FACTORY, FOCUS_ORIGIN_MONITOR_PROVIDER, applyCssTransform, UP_ARROW, DOWN_ARROW, RIGHT_ARROW, LEFT_ARROW, PAGE_UP, PAGE_DOWN, HOME, END, ENTER, SPACE, TAB, ESCAPE, BACKSPACE, DELETE, MATERIAL_COMPATIBILITY_MODE, MATERIAL_SANITY_CHECKS, getMdCompatibilityInvalidPrefixError, MAT_ELEMENTS_SELECTOR, MD_ELEMENTS_SELECTOR, MatPrefixRejector, MdPrefixRejector, AnimationCurves, AnimationDurations, MdSelectionModule, MdPseudoCheckbox, NativeDateModule, MdNativeDateModule, DateAdapter, MD_DATE_FORMATS, NativeDateAdapter, MD_NATIVE_DATE_FORMATS, MaterialModule, MdAutocompleteModule, MdAutocomplete, AUTOCOMPLETE_OPTION_HEIGHT, AUTOCOMPLETE_PANEL_HEIGHT, MD_AUTOCOMPLETE_VALUE_ACCESSOR, MdAutocompleteTrigger, MdButtonModule, MdButtonCssMatStyler, MdRaisedButtonCssMatStyler, MdIconButtonCssMatStyler, MdFabCssMatStyler, MdMiniFabCssMatStyler, MdButtonBase, _MdButtonMixinBase, MdButton, MdAnchor, MdButtonToggleModule, MD_BUTTON_TOGGLE_GROUP_VALUE_ACCESSOR, MdButtonToggleChange, MdButtonToggleGroup, MdButtonToggleGroupMultiple, MdButtonToggle, MdCardModule, MdCardContent, MdCardTitle, MdCardSubtitle, MdCardActions, MdCardFooter, MdCardSmImage, MdCardMdImage, MdCardLgImage, MdCardImage, MdCardXlImage, MdCardAvatar, MdCard, MdCardHeader, MdCardTitleGroup, MdChipsModule, MdChipList, MdChip, MdCheckboxModule, MD_CHECKBOX_CONTROL_VALUE_ACCESSOR, TransitionCheckState, MdCheckboxChange, MdCheckboxBase, _MdCheckboxMixinBase, MdCheckbox, MdDatepickerModule, MdCalendar, MdCalendarCell, MdCalendarBody, MdDatepickerContent, MdDatepicker, MD_DATEPICKER_VALUE_ACCESSOR, MD_DATEPICKER_VALIDATORS, MdDatepickerInput, MdDatepickerIntl, MdDatepickerToggle, MdMonthView, MdYearView, MdDialogModule, MD_DIALOG_DATA, MdDialog, throwMdDialogContentAlreadyAttachedError, MdDialogContainer, MdDialogClose, MdDialogTitle, MdDialogContent, MdDialogActions, MdDialogConfig, MdDialogRef, MdGridListModule, MdGridTile, MdGridList, MdIconModule, MdIcon, getMdIconNameNotFoundError, getMdIconNoHttpProviderError, MdIconRegistry, ICON_REGISTRY_PROVIDER_FACTORY, ICON_REGISTRY_PROVIDER, MdInputModule, MdTextareaAutosize, MdPlaceholder, MdHint, MdErrorDirective, MdPrefix, MdSuffix, MdInputDirective, MdInputContainer, getMdInputContainerPlaceholderConflictError, getMdInputContainerUnsupportedTypeError, getMdInputContainerDuplicatedHintError, getMdInputContainerMissingMdInputError, MdListModule, MdListDivider, MdList, MdListCssMatStyler, MdNavListCssMatStyler, MdDividerCssMatStyler, MdListAvatarCssMatStyler, MdListIconCssMatStyler, MdListSubheaderCssMatStyler, MdListItem, MdMenuModule, fadeInItems, transformMenu, MdMenu, MdMenuItem, MdMenuTrigger, MdProgressBarModule, MdProgressBar, MdProgressSpinnerModule, PROGRESS_SPINNER_STROKE_WIDTH, MdProgressSpinnerCssMatStyler, MdProgressSpinner, MdSpinner, MdRadioModule, MD_RADIO_GROUP_CONTROL_VALUE_ACCESSOR, MdRadioChange, MdRadioGroupBase, _MdRadioGroupMixinBase, MdRadioGroup, MdRadioButton, MdSelectModule, fadeInContent, transformPanel, transformPlaceholder, SELECT_OPTION_HEIGHT, SELECT_PANEL_MAX_HEIGHT, SELECT_MAX_OPTIONS_DISPLAYED, SELECT_TRIGGER_HEIGHT, SELECT_OPTION_HEIGHT_ADJUSTMENT, SELECT_PANEL_PADDING_X, SELECT_MULTIPLE_PANEL_PADDING_X, SELECT_PANEL_PADDING_Y, SELECT_PANEL_VIEWPORT_PADDING, MdSelectChange, MdSelect, MdSidenavModule, throwMdDuplicatedSidenavError, MdSidenavToggleResult, MdSidenav, MdSidenavContainer, MdSliderModule, MD_SLIDER_VALUE_ACCESSOR, MdSliderChange, MdSliderBase, _MdSliderMixinBase, MdSlider, SliderRenderer, MdSlideToggleModule, MD_SLIDE_TOGGLE_VALUE_ACCESSOR, MdSlideToggleChange, MdSlideToggleBase, _MdSlideToggleMixinBase, MdSlideToggle, MdSnackBarModule, MdSnackBar, SHOW_ANIMATION, HIDE_ANIMATION, MdSnackBarContainer, MdSnackBarConfig, MdSnackBarRef, SimpleSnackBar, MdTabsModule, MdInkBar, MdTabBody, MdTabHeader, MdTabLabelWrapper, MdTab, MdTabLabel, MdTabChangeEvent, MdTabGroup, MdTabNavBar, MdTabLink, MdTabLinkRipple, MdToolbarModule, MdToolbarRow, MdToolbar, MdTooltipModule, TOUCHEND_HIDE_DELAY, SCROLL_THROTTLE_MS, throwMdTooltipInvalidPositionError, MdTooltip, TooltipComponent, LIVE_ANNOUNCER_PROVIDER_FACTORY as ɵi, mixinDisabled as ɵp, UNIQUE_SELECTION_DISPATCHER_PROVIDER_FACTORY as ɵj, MdMutationObserverFactory as ɵa, OVERLAY_CONTAINER_PROVIDER as ɵc, OVERLAY_CONTAINER_PROVIDER_FACTORY as ɵb, OverlayPositionBuilder as ɵo, VIEWPORT_RULER_PROVIDER as ɵe, VIEWPORT_RULER_PROVIDER_FACTORY as ɵd, SCROLL_DISPATCHER_PROVIDER as ɵg, SCROLL_DISPATCHER_PROVIDER_FACTORY as ɵf, RippleRenderer as ɵh, MdGridAvatarCssMatStyler as ɵl, MdGridTileFooterCssMatStyler as ɵn, MdGridTileHeaderCssMatStyler as ɵm, MdGridTileText as ɵk };
+export { Dir, RtlModule, ObserveContentModule, ObserveContent, MdOptionModule, MdOption, MdOptionSelectionChange, Portal, BasePortalHost, ComponentPortal, TemplatePortal, PortalHostDirective, TemplatePortalDirective, PortalModule, DomPortalHost, GestureConfig, LiveAnnouncer, LIVE_ANNOUNCER_ELEMENT_TOKEN, LIVE_ANNOUNCER_PROVIDER, InteractivityChecker, isFakeMousedownFromScreenReader, A11yModule, UniqueSelectionDispatcher, UNIQUE_SELECTION_DISPATCHER_PROVIDER, MdLineModule, MdLine, MdLineSetter, coerceBooleanProperty, coerceNumberProperty, CompatibilityModule, NoConflictStyleCompatibilityMode, MdCommonModule, MdCoreModule, PlatformModule, Platform, getSupportedInputTypes, Overlay, OVERLAY_PROVIDERS, OverlayContainer, FullscreenOverlayContainer, OverlayRef, OverlayState, ConnectedOverlayDirective, OverlayOrigin, OverlayModule, ViewportRuler, GlobalPositionStrategy, ConnectedPositionStrategy, ConnectionPositionPair, ScrollableViewProperties, ConnectedOverlayPositionChange, Scrollable, ScrollDispatcher, RepositionScrollStrategy, CloseScrollStrategy, NoopScrollStrategy, BlockScrollStrategy, ScrollDispatchModule, MdRipple, MD_RIPPLE_GLOBAL_OPTIONS, RippleRef, RippleState, RIPPLE_FADE_IN_DURATION, RIPPLE_FADE_OUT_DURATION, MdRippleModule, SelectionModel, SelectionChange, FocusTrap, FocusTrapFactory, FocusTrapDeprecatedDirective, FocusTrapDirective, StyleModule, TOUCH_BUFFER_MS, FocusOriginMonitor, CdkMonitorFocus, FOCUS_ORIGIN_MONITOR_PROVIDER_FACTORY, FOCUS_ORIGIN_MONITOR_PROVIDER, applyCssTransform, UP_ARROW, DOWN_ARROW, RIGHT_ARROW, LEFT_ARROW, PAGE_UP, PAGE_DOWN, HOME, END, ENTER, SPACE, TAB, ESCAPE, BACKSPACE, DELETE, MATERIAL_COMPATIBILITY_MODE, MATERIAL_SANITY_CHECKS, getMdCompatibilityInvalidPrefixError, MAT_ELEMENTS_SELECTOR, MD_ELEMENTS_SELECTOR, MatPrefixRejector, MdPrefixRejector, AnimationCurves, AnimationDurations, MdSelectionModule, MdPseudoCheckbox, NativeDateModule, MdNativeDateModule, DateAdapter, MD_DATE_FORMATS, NativeDateAdapter, MD_NATIVE_DATE_FORMATS, MaterialModule, MdAutocompleteModule, MdAutocomplete, AUTOCOMPLETE_OPTION_HEIGHT, AUTOCOMPLETE_PANEL_HEIGHT, MD_AUTOCOMPLETE_VALUE_ACCESSOR, MdAutocompleteTrigger, MdButtonModule, MdButtonCssMatStyler, MdRaisedButtonCssMatStyler, MdIconButtonCssMatStyler, MdFabCssMatStyler, MdMiniFabCssMatStyler, MdButtonBase, _MdButtonMixinBase, MdButton, MdAnchor, MdButtonToggleModule, MD_BUTTON_TOGGLE_GROUP_VALUE_ACCESSOR, MdButtonToggleChange, MdButtonToggleGroup, MdButtonToggleGroupMultiple, MdButtonToggle, MdCardModule, MdCardContent, MdCardTitle, MdCardSubtitle, MdCardActions, MdCardFooter, MdCardSmImage, MdCardMdImage, MdCardLgImage, MdCardImage, MdCardXlImage, MdCardAvatar, MdCard, MdCardHeader, MdCardTitleGroup, MdChipsModule, MdChipList, MdChip, MdCheckboxModule, MD_CHECKBOX_CONTROL_VALUE_ACCESSOR, TransitionCheckState, MdCheckboxChange, MdCheckboxBase, _MdCheckboxMixinBase, MdCheckbox, MdDatepickerModule, MdCalendar, MdCalendarCell, MdCalendarBody, MdDatepickerContent, MdDatepicker, MD_DATEPICKER_VALUE_ACCESSOR, MD_DATEPICKER_VALIDATORS, MdDatepickerInput, MdDatepickerIntl, MdDatepickerToggle, MdMonthView, MdYearView, MdDialogModule, MD_DIALOG_DATA, MdDialog, throwMdDialogContentAlreadyAttachedError, MdDialogContainer, MdDialogClose, MdDialogTitle, MdDialogContent, MdDialogActions, MdDialogConfig, MdDialogRef, MdExpansionModule, CdkAccordion, CdkAccordionItem, MdExpansionPanel, MdExpansionPanelHeader, MdExpansionPanelDescription, MdExpansionPanelTitle, MdGridListModule, MdGridTile, MdGridList, MdIconModule, MdIcon, getMdIconNameNotFoundError, getMdIconNoHttpProviderError, MdIconRegistry, ICON_REGISTRY_PROVIDER_FACTORY, ICON_REGISTRY_PROVIDER, MdInputModule, MdTextareaAutosize, MdPlaceholder, MdHint, MdErrorDirective, MdPrefix, MdSuffix, MdInputDirective, MdInputContainer, getMdInputContainerPlaceholderConflictError, getMdInputContainerUnsupportedTypeError, getMdInputContainerDuplicatedHintError, getMdInputContainerMissingMdInputError, MdListModule, MdListDivider, MdList, MdListCssMatStyler, MdNavListCssMatStyler, MdDividerCssMatStyler, MdListAvatarCssMatStyler, MdListIconCssMatStyler, MdListSubheaderCssMatStyler, MdListItem, MdMenuModule, fadeInItems, transformMenu, MdMenu, MdMenuItem, MdMenuTrigger, MdProgressBarModule, MdProgressBar, MdProgressSpinnerModule, PROGRESS_SPINNER_STROKE_WIDTH, MdProgressSpinnerCssMatStyler, MdProgressSpinner, MdSpinner, MdRadioModule, MD_RADIO_GROUP_CONTROL_VALUE_ACCESSOR, MdRadioChange, MdRadioGroupBase, _MdRadioGroupMixinBase, MdRadioGroup, MdRadioButton, MdSelectModule, fadeInContent, transformPanel, transformPlaceholder, SELECT_OPTION_HEIGHT, SELECT_PANEL_MAX_HEIGHT, SELECT_MAX_OPTIONS_DISPLAYED, SELECT_TRIGGER_HEIGHT, SELECT_OPTION_HEIGHT_ADJUSTMENT, SELECT_PANEL_PADDING_X, SELECT_MULTIPLE_PANEL_PADDING_X, SELECT_PANEL_PADDING_Y, SELECT_PANEL_VIEWPORT_PADDING, MdSelectChange, MdSelect, MdSidenavModule, throwMdDuplicatedSidenavError, MdSidenavToggleResult, MdSidenav, MdSidenavContainer, MdSliderModule, MD_SLIDER_VALUE_ACCESSOR, MdSliderChange, MdSliderBase, _MdSliderMixinBase, MdSlider, SliderRenderer, MdSlideToggleModule, MD_SLIDE_TOGGLE_VALUE_ACCESSOR, MdSlideToggleChange, MdSlideToggleBase, _MdSlideToggleMixinBase, MdSlideToggle, MdSnackBarModule, MdSnackBar, SHOW_ANIMATION, HIDE_ANIMATION, MdSnackBarContainer, MdSnackBarConfig, MdSnackBarRef, SimpleSnackBar, MdTabsModule, MdInkBar, MdTabBody, MdTabHeader, MdTabLabelWrapper, MdTab, MdTabLabel, MdTabChangeEvent, MdTabGroup, MdTabNavBar, MdTabLink, MdTabLinkRipple, MdToolbarModule, MdToolbarRow, MdToolbar, MdTooltipModule, TOUCHEND_HIDE_DELAY, SCROLL_THROTTLE_MS, throwMdTooltipInvalidPositionError, MdTooltip, TooltipComponent, LIVE_ANNOUNCER_PROVIDER_FACTORY as ɵi, mixinDisabled as ɵq, UNIQUE_SELECTION_DISPATCHER_PROVIDER_FACTORY as ɵj, MdMutationObserverFactory as ɵa, OVERLAY_CONTAINER_PROVIDER as ɵc, OVERLAY_CONTAINER_PROVIDER_FACTORY as ɵb, OverlayPositionBuilder as ɵp, VIEWPORT_RULER_PROVIDER as ɵe, VIEWPORT_RULER_PROVIDER_FACTORY as ɵd, SCROLL_DISPATCHER_PROVIDER as ɵg, SCROLL_DISPATCHER_PROVIDER_FACTORY as ɵf, RippleRenderer as ɵh, EXPANSION_PANEL_ANIMATION_TIMING as ɵk, MdGridAvatarCssMatStyler as ɵm, MdGridTileFooterCssMatStyler as ɵo, MdGridTileHeaderCssMatStyler as ɵn, MdGridTileText as ɵl };
 //# sourceMappingURL=material.js.map
