@@ -28,7 +28,6 @@ import 'rxjs/add/operator/finally';
 import 'rxjs/add/operator/catch';
 import 'rxjs/add/observable/throw';
 import 'rxjs/add/operator/switchMap';
-import { BrowserAnimationsModule } from '@angular/platform-browser/animations';
 import 'rxjs/add/operator/takeUntil';
 
 const MATERIAL_COMPATIBILITY_MODE = new InjectionToken('md-compatibility-mode');
@@ -20939,7 +20938,7 @@ class MdExpansionModule {
 }
 MdExpansionModule.decorators = [
     { type: NgModule, args: [{
-                imports: [CompatibilityModule, CommonModule, BrowserAnimationsModule],
+                imports: [CompatibilityModule, CommonModule],
                 exports: [
                     MdExpansionPanel,
                     MdExpansionPanelHeader,
